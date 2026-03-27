@@ -1,0 +1,7 @@
+{
+  "name": "Coda express",
+  "description": "app G.N",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
