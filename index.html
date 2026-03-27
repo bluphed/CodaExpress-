@@ -6,12 +6,8 @@
     <title>Coda Express - Calculadora de Delivery</title>
     <link rel="manifest" href="/manifest.json" />
     <meta name="theme-color" content="#DE440D" />
-    <link rel="apple-touch-icon" href="/icon.png" />
-
-    
-<link rel="manifest" href="/manifest.json" crossorigin="anonymous">
-
-    
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="apple-touch-icon" href="/icon.svg" />
   </head>
   <body>
     <div id="root"></div>
@@ -27,15 +23,6 @@
         });
       }
     </script>
-    
-    <script>
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/sw.js')
-      .then(reg => console.log('✅ Service Worker registrado'))
-      .catch(err => console.log('❌ Error:', err));
-  }
-</script>
-    
   </body>
 </html>
 

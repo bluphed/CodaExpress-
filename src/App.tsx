@@ -13,14 +13,47 @@ import {
   Info,
   ExternalLink,
   CheckCircle2,
-  AlertCircle
+  AlertCircle,
+  History,
+  Trash2,
+  RefreshCw,
+  LayoutDashboard
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { GoogleGenAI } from "@google/genai";
+import { 
+  auth, 
+  db, 
+  signInWithGoogle, 
+  logout, 
+  collection, 
+  addDoc, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot, 
+  deleteDoc, 
+  doc 
+} from './firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
 
 // --- Types ---
 interface Point {
   lat: number;
   lng: number;
+}
+
+interface Order {
+  id: string;
+  nombre: string;
+  telefono: string;
+  direccion: string;
+  costo: number;
+  lat: number;
+  lng: number;
+  timestamp: number;
+  uid?: string;
+  tiempoEntrega?: string;
 }
 
 interface PredefinedLocation extends Point {
@@ -30,6 +63,11 @@ interface PredefinedLocation extends Point {
 interface CalculationResult {
   distancia: number;
   costo: number;
+  nombre: string;
+  telefono: string;
+  direccion: string;
+  clientePoint: Point | null;
+  tiempoEntrega: string;
 }
 
 // --- Constants ---
@@ -57,15 +95,92 @@ export default function App() {
   const [resultado, setResultado] = useState<CalculationResult | null>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isDashboardOpen, setIsDashboardOpen] = useState(false);
+  const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
+  const [adminClickCount, setAdminClickCount] = useState(0);
+  const [passwordInput, setPasswordInput] = useState('');
+  const [tiempoEntrega, setTiempoEntrega] = useState('Lo antes posible');
+  const [user, setUser] = useState<User | null>(null);
+  const [history, setHistory] = useState<Order[]>([]);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [isParsing, setIsParsing] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
   const { isLoaded } = useJsApiLoader({
     id: 'google-map-script',
-    googleMapsApiKey: "AIzaSyDFR0mPU-jz-crPgioPus5UEdfeEZ90yk4",
+    googleMapsApiKey: process.env.VITE_GOOGLE_MAPS_API_KEY || "AIzaSyDFR0mPU-jz-crPgioPus5UEdfeEZ90yk4",
     libraries: LIBRARIES,
   });
 
   // --- Effects ---
+  const calcularCosto = useCallback((silent = false) => {
+    if (!restaurante || !cliente || !window.google) {
+      return;
+    }
+
+    const dist = window.google.maps.geometry.spherical.computeDistanceBetween(
+      new window.google.maps.LatLng(restaurante.lat, restaurante.lng),
+      new window.google.maps.LatLng(cliente.lat, cliente.lng)
+    );
+
+    const distanciaKm = dist / 1000;
+    let total = 0;
+
+    if (distanciaKm <= 1.5) {
+      total = 2.00;
+    } else {
+      const extraKm = distanciaKm - 1.5;
+      const bloquesExtra = Math.floor(extraKm / 0.85);
+      
+      if (bloquesExtra <= 5) {
+        total = 2.50 + (bloquesExtra * 0.25);
+      } else {
+        total = 4.50 + ((bloquesExtra - 6) * 0.25);
+      }
+    }
+
+    total = Math.ceil(total * 4) / 4;
+
+    setResultado({
+      distancia: distanciaKm,
+      costo: total,
+      nombre: nombreCliente,
+      telefono: telefonoCliente,
+      direccion: direccionCliente,
+      clientePoint: cliente
+    });
+    
+    if (!silent) {
+      showToast('Costo actualizado', 'success');
+    }
+  }, [restaurante, cliente, nombreCliente, telefonoCliente, direccionCliente]);
+
+  useEffect(() => {
+    if (restaurante && cliente && isLoaded) {
+      calcularCosto(true);
+    }
+  }, [restaurante, cliente, nombreCliente, telefonoCliente, direccionCliente, isLoaded, calcularCosto]);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+      // Update UI notify the user they can install the PWA
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setIsSplashVisible(false);
@@ -87,13 +202,185 @@ export default function App() {
     }
   }, [restaurante]);
 
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Fetch History (User's own orders)
+  useEffect(() => {
+    if (!user) {
+      setHistory([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'orders'),
+      where('uid', '==', user.uid),
+      orderBy('timestamp', 'desc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Order[];
+      setHistory(orders);
+    }, (error) => {
+      console.error('Firestore Error (History):', error);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Fetch All Orders (Admin only)
+  useEffect(() => {
+    if (!isAdminAuthenticated) {
+      setAllOrders([]);
+      return;
+    }
+    const q = query(
+      collection(db, 'orders'),
+      orderBy('timestamp', 'desc')
+    );
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const orders = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as Order[];
+      setAllOrders(orders);
+    }, (error) => {
+      console.error('Firestore Error (Dashboard):', error);
+    });
+    return () => unsubscribe();
+  }, [isAdminAuthenticated]);
+
+  const saveOrder = async (res: CalculationResult) => {
+    try {
+      await addDoc(collection(db, 'orders'), {
+        nombre: res.nombre,
+        telefono: res.telefono,
+        direccion: res.direccion,
+        lat: res.clientePoint?.lat,
+        lng: res.clientePoint?.lng,
+        costo: res.costo,
+        timestamp: Date.now(),
+        uid: user?.uid || 'anonymous',
+        tiempoEntrega: res.tiempoEntrega
+      });
+      showToast('Pedido guardado en la nube', 'success');
+    } catch (error) {
+      console.error('Error saving order:', error);
+      showToast('Error al guardar pedido', 'error');
+    }
+  };
+
+  const deleteOrder = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'orders', id));
+      showToast('Pedido eliminado', 'success');
+    } catch (error) {
+      console.error('Error deleting order:', error);
+      showToast('No tienes permiso para eliminar', 'error');
+    }
+  };
+
+  const handleUseMyLocation = () => {
+    if (!navigator.geolocation) {
+      showToast('Geolocalización no soportada', 'error');
+      return;
+    }
+
+    showToast('Obteniendo ubicación...', 'info');
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const point = {
+          lat: position.coords.latitude,
+          lng: position.coords.longitude
+        };
+        setCliente(point);
+        if (map) {
+          map.panTo(point);
+          map.setZoom(16);
+        }
+        showToast('Ubicación obtenida!', 'success');
+
+        if (window.google) {
+          const geocoder = new window.google.maps.Geocoder();
+          geocoder.geocode({ location: point }, (results, status) => {
+            if (status === 'OK' && results && results[0]) {
+              setDireccionCliente(results[0].formatted_address);
+            }
+          });
+        }
+      },
+      (error) => {
+        console.error('Error getting location:', error);
+        showToast('Error al obtener ubicación', 'error');
+      }
+    );
+  };
+
+  const parseWithGemini = async (text: string) => {
+    if (!text) return;
+    setIsParsing(true);
+    showToast('IA analizando dirección...', 'info');
+
+    try {
+      const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+      const model = genAI.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: `Analiza el siguiente texto y extrae el nombre del cliente, teléfono y dirección si están presentes. Devuelve un JSON con los campos: nombre, telefono, direccion. Si no encuentras alguno, deja el campo vacío. Texto: "${text}"`,
+        config: { responseMimeType: "application/json" }
+      });
+
+      const response = await model;
+      const data = JSON.parse(response.text);
+      
+      if (data.nombre) setNombreCliente(data.nombre);
+      if (data.telefono) setTelefonoCliente(data.telefono);
+      if (data.direccion) setDireccionCliente(data.direccion);
+      
+      showToast('Datos extraídos con éxito', 'success');
+    } catch (error) {
+      console.error('Error parsing with Gemini:', error);
+      showToast('Error al analizar con IA', 'error');
+    } finally {
+      setIsParsing(false);
+    }
+  };
+
   // --- Handlers ---
+  const handleAdminClick = () => {
+    const newCount = adminClickCount + 1;
+    setAdminClickCount(newCount);
+    if (newCount === 3) {
+      setIsDashboardOpen(true);
+      setAdminClickCount(0);
+      showToast('Acceso administrativo', 'info');
+    }
+    // Reset count after 2 seconds of inactivity
+    setTimeout(() => setAdminClickCount(0), 2000);
+  };
+
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
   };
 
   const toggleTheme = () => setIsDarkMode(!isDarkMode);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    // Show the install prompt
+    deferredPrompt.prompt();
+    // Wait for the user to respond to the prompt
+    const { outcome } = await deferredPrompt.userChoice;
+    // Optionally, send analytics event with outcome of user choice
+    console.log(`User response to the install prompt: ${outcome}`);
+    // We've used the prompt, and can't use it again, throw it away
+    setDeferredPrompt(null);
+    setIsInstallable(false);
+  };
 
   const onLoad = useCallback((map: google.maps.Map) => {
     setMap(map);
@@ -162,7 +449,11 @@ export default function App() {
     const queryRegex = /[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/;
     const queryMatch = targetUrl.match(queryRegex);
 
-    const finalMatch = match || desktopMatch || queryMatch;
+    // Matches /search/lat,lng
+    const searchRegex = /search\/(-?\d+\.\d+),(-?\d+\.\d+)/;
+    const searchMatch = targetUrl.match(searchRegex);
+
+    const finalMatch = match || desktopMatch || queryMatch || searchMatch;
 
     if (finalMatch) {
       const lat = parseFloat(finalMatch[1]);
@@ -175,6 +466,7 @@ export default function App() {
         map.setZoom(16);
       }
       showToast('Ubicación encontrada!', 'success');
+      setLocationLink(''); // Clear input after success
 
       if (window.google) {
         const geocoder = new window.google.maps.Geocoder();
@@ -185,43 +477,29 @@ export default function App() {
         });
       }
     } else {
-      showToast('No se pudo extraer la ubicación del link largo', 'error');
+      showToast('No se pudo extraer la ubicación del link', 'error');
     }
   };
 
-  const calcularCosto = () => {
-    if (!restaurante || !cliente || !window.google) {
+  const resetForm = () => {
+    setCliente(null);
+    setLocationLink('');
+    setNombreCliente('');
+    setTelefonoCliente('');
+    setDireccionCliente('');
+    setResultado(null);
+    if (map) {
+      map.panTo(restaurante || DEFAULT_CENTER);
+      map.setZoom(14);
+    }
+  };
+
+  const handleCalcularManual = () => {
+    if (!restaurante || !cliente) {
       showToast('Debes marcar local y cliente', 'error');
       return;
     }
-
-    const dist = window.google.maps.geometry.spherical.computeDistanceBetween(
-      new window.google.maps.LatLng(restaurante.lat, restaurante.lng),
-      new window.google.maps.LatLng(cliente.lat, cliente.lng)
-    );
-
-    const distanciaKm = dist / 1000;
-    let total = 0;
-
-    if (distanciaKm <= 1.5) {
-      total = 2.00;
-    } else {
-      const extraKm = distanciaKm - 1.5;
-      const bloquesExtra = Math.floor(extraKm / 0.85);
-      
-      if (bloquesExtra <= 5) {
-        total = 2.50 + (bloquesExtra * 0.25);
-      } else {
-        total = 4.50 + ((bloquesExtra - 6) * 0.25);
-      }
-    }
-
-    total = Math.ceil(total * 4) / 4;
-
-    setResultado({
-      distancia: distanciaKm,
-      costo: total,
-    });
+    calcularCosto();
   };
 
   const enviarWhatsApp = () => {
@@ -238,15 +516,16 @@ export default function App() {
     const nombreLocal = localEncontrado ? localEncontrado.name : 'Ubicación personalizada';
 
     const restaurantMapsLink = `https://maps.google.com/?q=${restaurante.lat},${restaurante.lng}`;
-    const clientMapsLink = cliente ? `https://maps.google.com/?q=${cliente.lat},${cliente.lng}` : 'No marcada';
+    const clientMapsLink = resultado.clientePoint ? `https://maps.google.com/?q=${resultado.clientePoint.lat},${resultado.clientePoint.lng}` : 'No marcada';
     
     const mensaje = `*Pedido Delivery*\n\n` +
       `🏪 *Local de retiro:* ${nombreLocal}\n` +
       `📍 *Ubicación Local:* ${restaurantMapsLink}\n\n` +
-      `👤 *Cliente:* ${nombreCliente || 'No especificado'}\n` +
-      `📞 *Teléfono:* ${telefonoCliente || 'No especificado'}\n` +
-      `🏠 *Dirección Cliente:* ${direccionCliente || 'No especificada'}\n` +
+      `👤 *Cliente:* ${resultado.nombre || 'No especificado'}\n` +
+      `📞 *Teléfono:* ${resultado.telefono || 'No especificado'}\n` +
+      `🏠 *Dirección Cliente:* ${resultado.direccion || 'No especificada'}\n` +
       `🗺️ *Ubicación GPS Cliente:* ${clientMapsLink}\n\n` +
+      `🕒 *Tiempo de entrega:* ${resultado.tiempoEntrega}\n` +
       `📏 *Distancia:* ${resultado.distancia.toFixed(2)} km\n` +
       `💰 *Costo de envío:* $${resultado.costo.toFixed(2)}`;
 
@@ -256,6 +535,15 @@ export default function App() {
         window.open(url, '_blank');
       }, index * 500);
     });
+
+    // Save to history
+    saveOrder(resultado);
+
+    // Reset everything after sending
+    setTimeout(() => {
+      resetForm();
+      showToast('Formulario reiniciado para nuevo pedido', 'info');
+    }, 2000);
   };
 
   // --- Render ---
@@ -269,11 +557,11 @@ export default function App() {
             exit={{ opacity: 0 }}
             className="fixed inset-0 bg-white dark:bg-[#0f172a] flex flex-col items-center justify-center z-[9999]"
           >
-            <div className="w-32 h-32 bg-coda rounded-[35px] flex items-center justify-center shadow-2xl shadow-coda/30 animate-pulse-slow overflow-hidden">
+            <div className="w-40 h-40 bg-white dark:bg-stone-800 rounded-[45px] flex items-center justify-center shadow-2xl shadow-coda/30 animate-pulse-slow overflow-hidden border-4 border-coda">
               <img 
-                src="/icon.png" 
+                src="/icon.svg" 
                 alt="Coda Express Logo" 
-                className="w-24 h-24 object-contain"
+                className="w-32 h-32 object-contain"
                 referrerPolicy="no-referrer"
               />
             </div>
@@ -300,20 +588,87 @@ export default function App() {
         <div className="max-w-4xl mx-auto p-4 md:p-8 pt-20 overflow-x-hidden">
           <header className="flex items-center justify-between mb-8">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-coda rounded-xl flex items-center justify-center overflow-hidden">
+              <div className="w-12 h-12 bg-white dark:bg-stone-800 rounded-2xl flex items-center justify-center overflow-hidden border-2 border-coda shadow-sm">
                 <img 
-                  src="/icon.png" 
+                  src="/icon.svg" 
                   alt="Logo" 
-                  className="w-8 h-8 object-contain"
+                  className="w-10 h-10 object-contain"
                   referrerPolicy="no-referrer"
                 />
               </div>
               <h1 className="text-2xl font-bold text-coda">Coda Express</h1>
             </div>
-            <span className="text-xs font-semibold bg-coda/10 text-coda px-3 py-1 rounded-full border border-coda/20">
-              En línea
-            </span>
+            <div className="flex items-center gap-2">
+              {user ? (
+                <div className="flex items-center gap-2">
+                  <img 
+                    src={user.photoURL || ''} 
+                    alt={user.displayName || ''} 
+                    className="w-8 h-8 rounded-full border border-coda/20"
+                  />
+                  <button 
+                    onClick={logout}
+                    className="text-[10px] font-bold text-stone-500 hover:text-rose-500 transition-colors"
+                  >
+                    Salir
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={signInWithGoogle}
+                  className="text-xs font-bold text-coda hover:underline"
+                >
+                  Entrar
+                </button>
+              )}
+              <button 
+                onClick={() => setIsHistoryOpen(true)}
+                className="p-2 text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-800 rounded-full transition-colors"
+                title="Historial de pedidos"
+              >
+                <History size={20} />
+              </button>
+              {isInstallable && (
+                <button 
+                  onClick={handleInstallClick}
+                  className="hidden md:flex items-center gap-2 bg-coda text-white px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-coda/90 transition-all shadow-sm"
+                >
+                  <Navigation size={14} className="rotate-90" />
+                  Instalar App
+                </button>
+              )}
+              <span 
+                onClick={handleAdminClick}
+                className="text-xs font-semibold bg-coda/10 text-coda px-3 py-1 rounded-full border border-coda/20 cursor-default select-none active:scale-95 transition-all"
+              >
+                En línea
+              </span>
+            </div>
           </header>
+
+          {isInstallable && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="md:hidden mb-6 bg-coda/5 border border-coda/20 p-4 rounded-2xl flex items-center justify-between gap-4"
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-white dark:bg-stone-800 rounded-xl flex items-center justify-center shrink-0 border-2 border-coda shadow-sm overflow-hidden">
+                  <img src="/icon.svg" alt="App Icon" className="w-10 h-10 object-contain" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-stone-800 dark:text-stone-100">Instalar Coda Express</h4>
+                  <p className="text-[10px] text-stone-500 dark:text-stone-400">Acceso rápido desde tu pantalla de inicio</p>
+                </div>
+              </div>
+              <button 
+                onClick={handleInstallClick}
+                className="bg-coda text-white px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap shadow-md shadow-coda/20"
+              >
+                Instalar
+              </button>
+            </motion.div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Left Column */}
@@ -323,17 +678,26 @@ export default function App() {
                 
                 <div className="space-y-4">
                   <label className="block text-sm font-medium text-stone-600 dark:text-stone-400">Link de Google Maps</label>
-                  <input 
-                    type="text" 
-                    value={locationLink}
-                    onChange={(e) => setLocationLink(e.target.value)}
-                    placeholder="https://maps.app.goo.gl/... o link largo"
-                    className="w-full p-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 text-sm focus:ring-2 focus:ring-coda/20 focus:border-coda outline-none transition-all"
-                  />
-                  <div className="flex justify-center">
+                  <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={locationLink}
+                      onChange={(e) => setLocationLink(e.target.value)}
+                      placeholder="https://maps.app.goo.gl/... o link largo"
+                      className="flex-1 p-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 text-sm focus:ring-2 focus:ring-coda/20 focus:border-coda outline-none transition-all"
+                    />
+                    <button 
+                      onClick={handleUseMyLocation}
+                      className="p-3 bg-stone-100 dark:bg-stone-800 text-coda rounded-xl hover:bg-stone-200 dark:hover:bg-stone-700 transition-all"
+                      title="Usar mi ubicación actual"
+                    >
+                      <Navigation size={20} />
+                    </button>
+                  </div>
+                  <div className="flex justify-center gap-2">
                     <button 
                       onClick={() => processLocationLink(locationLink)}
-                      className="bg-coda text-white px-8 py-3 rounded-xl font-bold text-sm hover:bg-coda/90 active:scale-95 transition-all shadow-lg shadow-coda/20"
+                      className="bg-coda text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-coda/90 active:scale-95 transition-all shadow-lg shadow-coda/20"
                     >
                       Buscar Ubicación
                     </button>
@@ -424,22 +788,71 @@ export default function App() {
               <div className="bg-white dark:bg-[#1e293b] p-6 rounded-2xl border border-stone-200 dark:border-stone-700 shadow-sm space-y-4">
                 <h2 className="text-lg font-semibold text-stone-800 dark:text-stone-100">Datos del Cliente</h2>
                 <div className="space-y-3">
-                  <input 
-                    type="text" 
-                    placeholder="Nombre" 
-                    value={nombreCliente}
-                    onChange={(e) => setNombreCliente(e.target.value)}
-                    className="w-full p-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 outline-none focus:ring-2 focus:ring-coda/20"
-                  />
-                  <input 
-                    type="tel" 
-                    placeholder="Teléfono" 
-                    value={telefonoCliente}
-                    onChange={(e) => setTelefonoCliente(e.target.value)}
-                    className="w-full p-3 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 outline-none focus:ring-2 focus:ring-coda/20"
-                  />
+                  <div className="relative">
+                    <input 
+                      type="text" 
+                      placeholder="Nombre" 
+                      value={nombreCliente}
+                      onChange={(e) => setNombreCliente(e.target.value)}
+                      className="w-full p-3 pr-20 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 outline-none focus:ring-2 focus:ring-coda/20"
+                    />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                      {nombreCliente && (
+                        <button 
+                          onClick={() => setNombreCliente('')}
+                          className="p-2 text-stone-400 hover:text-rose-500 rounded-lg transition-colors"
+                        >
+                          <X size={16} />
+                        </button>
+                      )}
+                      <button 
+                        onClick={() => parseWithGemini(nombreCliente + " " + direccionCliente)}
+                        disabled={isParsing}
+                        className="p-2 text-coda hover:bg-coda/10 rounded-lg transition-colors disabled:opacity-50"
+                        title="Autocompletar con IA"
+                      >
+                        <RefreshCw size={18} className={isParsing ? "animate-spin" : ""} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="relative">
+                    <input 
+                      type="tel" 
+                      placeholder="Teléfono" 
+                      value={telefonoCliente}
+                      onChange={(e) => setTelefonoCliente(e.target.value)}
+                      className="w-full p-3 pr-10 rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50 dark:bg-[#0f172a] text-stone-800 dark:text-stone-100 outline-none focus:ring-2 focus:ring-coda/20"
+                    />
+                    {telefonoCliente && (
+                      <button 
+                        onClick={() => setTelefonoCliente('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-stone-400 hover:text-rose-500 rounded-lg transition-colors"
+                      >
+                        <X size={16} />
+                      </button>
+                    )}
+                  </div>
                   <div className="p-3 bg-stone-50 dark:bg-[#0f172a] rounded-xl border border-stone-200 dark:border-stone-700 text-xs text-stone-500 dark:text-stone-400 min-h-[40px] flex items-center">
                     {direccionCliente || 'Esperando ubicación...'}
+                  </div>
+
+                  <div className="pt-2">
+                    <label className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1 block">Tiempo de entrega estimado</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {['Lo antes posible', '15-20 min', '30 min', '45 min'].map((time) => (
+                        <button
+                          key={time}
+                          onClick={() => setTiempoEntrega(time)}
+                          className={`py-2 px-3 rounded-xl text-[10px] font-bold transition-all border ${
+                            tiempoEntrega === time 
+                              ? 'bg-coda text-white border-coda shadow-md shadow-coda/20' 
+                              : 'bg-stone-50 dark:bg-[#0f172a] text-stone-500 border-stone-200 dark:border-stone-700 hover:border-coda/30'
+                          }`}
+                        >
+                          {time}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -472,7 +885,7 @@ export default function App() {
               </AnimatePresence>
 
               <button 
-                onClick={calcularCosto} 
+                onClick={handleCalcularManual} 
                 className="w-full bg-coda text-white font-bold py-5 rounded-2xl shadow-lg shadow-coda/20 hover:bg-coda/90 active:scale-95 transition-all flex items-center justify-center gap-3 text-lg"
               >
                 <Calculator size={24} />
@@ -481,6 +894,14 @@ export default function App() {
             </div>
           </div>
         </div>
+
+        {/* Footer */}
+        <footer className="py-8 text-center border-t border-stone-100 dark:border-stone-800 mt-auto">
+          <div className="flex items-center justify-center gap-2 text-stone-300 dark:text-stone-600 text-[10px] font-bold uppercase tracking-[0.2em]">
+            <CheckCircle2 size={12} />
+            © 2024 Coda Express - Santo Domingo
+          </div>
+        </footer>
       </div>
 
       {/* Help Modal */}
@@ -533,6 +954,287 @@ export default function App() {
                   className="w-full bg-transparent text-stone-500 dark:text-stone-400 font-medium py-3 hover:text-stone-700 dark:hover:text-stone-200 transition-all"
                 >
                   Cancelar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Admin Dashboard Drawer (Glassmorphism) */}
+      <AnimatePresence>
+        {isDashboardOpen && (
+          <div className="fixed inset-0 z-[10000] flex justify-end">
+            {/* Backdrop */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsDashboardOpen(false)}
+              className="absolute inset-0 bg-black/20 backdrop-blur-sm"
+            />
+            
+            {/* Drawer */}
+            <motion.div 
+              initial={{ x: '100%' }}
+              animate={{ x: 0 }}
+              exit={{ x: '100%' }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="relative w-full max-w-xl h-full bg-white/80 dark:bg-stone-900/80 backdrop-blur-2xl border-l border-white/20 dark:border-white/5 shadow-2xl flex flex-col"
+            >
+              {/* Header */}
+              <div className="p-6 border-b border-stone-200/50 dark:border-white/10 flex items-center justify-between">
+                <div>
+                  <h3 className="text-xl font-bold text-stone-800 dark:text-white flex items-center gap-2">
+                    <LayoutDashboard size={20} className="text-coda" />
+                    Gestión de Flota
+                  </h3>
+                  <p className="text-[10px] text-stone-500 uppercase tracking-widest font-bold mt-1">Panel de Control Administrativo</p>
+                </div>
+                <button 
+                  onClick={() => setIsDashboardOpen(false)}
+                  className="p-2 hover:bg-stone-100 dark:hover:bg-white/10 rounded-full transition-colors"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {!isAdminAuthenticated ? (
+                <div className="flex-1 flex items-center justify-center p-8">
+                  <div className="w-full max-w-xs space-y-8 text-center">
+                    <div className="space-y-2">
+                      <div className="w-16 h-16 bg-coda/10 rounded-3xl flex items-center justify-center mx-auto mb-4 rotate-12">
+                        <LayoutDashboard size={32} className="text-coda" />
+                      </div>
+                      <h4 className="text-lg font-bold text-stone-800 dark:text-white">Acceso Restringido</h4>
+                      <p className="text-xs text-stone-500">Ingrese la clave maestra para visualizar la actividad en tiempo real.</p>
+                    </div>
+                    
+                    <div className="space-y-4">
+                      <input 
+                        type="password" 
+                        value={passwordInput}
+                        onChange={(e) => setPasswordInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            if (passwordInput === 'coda2024') {
+                              setIsAdminAuthenticated(true);
+                              setPasswordInput('');
+                            } else {
+                              showToast('Clave incorrecta', 'error');
+                            }
+                          }
+                        }}
+                        placeholder="••••••••"
+                        className="w-full bg-stone-100 dark:bg-white/5 border border-stone-200 dark:border-white/10 p-4 rounded-2xl text-center text-2xl tracking-[0.3em] outline-none focus:ring-2 focus:ring-coda/20 transition-all"
+                        autoFocus
+                      />
+                      <button 
+                        onClick={() => {
+                          if (passwordInput === 'coda2024') {
+                            setIsAdminAuthenticated(true);
+                            setPasswordInput('');
+                          } else {
+                            showToast('Clave incorrecta', 'error');
+                          }
+                        }}
+                        className="w-full bg-coda text-white py-4 rounded-2xl font-bold shadow-lg shadow-coda/20 hover:scale-[1.02] active:scale-95 transition-all"
+                      >
+                        Desbloquear Panel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {/* Stats */}
+                  <div className="grid grid-cols-2 gap-4 p-6">
+                    <div className="p-4 rounded-2xl bg-white dark:bg-white/5 border border-stone-200/50 dark:border-white/10 shadow-sm">
+                      <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Pedidos Hoy</div>
+                      <div className="text-2xl font-black text-stone-800 dark:text-white">{allOrders.length}</div>
+                    </div>
+                    <div className="p-4 rounded-2xl bg-white dark:bg-white/5 border border-stone-200/50 dark:border-white/10 shadow-sm">
+                      <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Total Facturado</div>
+                      <div className="text-2xl font-black text-coda">${allOrders.reduce((acc, curr) => acc + curr.costo, 0).toFixed(2)}</div>
+                    </div>
+                  </div>
+
+                  {/* List */}
+                  <div className="flex-1 overflow-y-auto p-6 pt-0 space-y-4 custom-scrollbar">
+                    <div className="flex items-center justify-between mb-2">
+                      <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">Actividad Reciente</h4>
+                      <div className="flex items-center gap-2 text-[10px] font-bold text-emerald-500">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                        ACTUALIZADO
+                      </div>
+                    </div>
+                    
+                    {allOrders.map((order) => (
+                      <div 
+                        key={order.id} 
+                        className="p-4 rounded-2xl bg-white/50 dark:bg-white/5 border border-stone-200/50 dark:border-white/10 hover:border-coda/30 transition-all group"
+                      >
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <div className="font-bold text-stone-800 dark:text-white text-sm">{order.nombre || 'Cliente Anónimo'}</div>
+                            <div className="text-[10px] text-stone-500">{new Date(order.timestamp).toLocaleString()}</div>
+                          </div>
+                          <div className="text-lg font-black text-coda">${order.costo.toFixed(2)}</div>
+                        </div>
+                        <div className="text-xs text-stone-600 dark:text-stone-400 line-clamp-1 mb-3">
+                          {order.direccion}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold px-2 py-1 bg-coda/10 text-coda rounded-lg">
+                            {order.tiempoEntrega || 'Inmediato'}
+                          </span>
+                          <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button 
+                              onClick={() => {
+                                const url = `https://maps.google.com/?q=${order.lat},${order.lng}`;
+                                window.open(url, '_blank');
+                              }}
+                              className="p-2 bg-stone-100 dark:bg-white/10 text-stone-600 dark:text-stone-400 rounded-lg hover:text-coda transition-all"
+                            >
+                              <MapPin size={14} />
+                            </button>
+                            <button 
+                              onClick={() => deleteOrder(order.id)}
+                              className="p-2 bg-stone-100 dark:bg-white/10 text-stone-400 hover:text-rose-500 rounded-lg transition-all"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {allOrders.length === 0 && (
+                      <div className="text-center py-20 text-stone-400 italic text-sm">
+                        No hay pedidos registrados en el sistema.
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  <div className="p-6 border-t border-stone-200/50 dark:border-white/10 bg-stone-50/50 dark:bg-black/20">
+                    <button 
+                      onClick={() => setIsAdminAuthenticated(false)}
+                      className="w-full py-3 text-xs font-bold text-stone-400 hover:text-rose-500 transition-colors uppercase tracking-widest"
+                    >
+                      Cerrar Sesión Administrativa
+                    </button>
+                  </div>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* History Modal */}
+      <AnimatePresence>
+        {isHistoryOpen && (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="bg-white dark:bg-[#1e293b] rounded-[28px] p-6 max-w-lg w-full max-h-[80vh] flex flex-col border border-stone-200 dark:border-stone-700 shadow-2xl"
+            >
+              <div className="flex items-center justify-between mb-6 border-b border-stone-100 dark:border-stone-800 pb-4">
+                <h3 className="text-xl font-bold text-stone-800 dark:text-stone-100 flex items-center gap-2">
+                  <History size={24} className="text-coda" />
+                  Historial de Pedidos
+                </h3>
+                <button 
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="p-2 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:text-rose-500 rounded-xl transition-all shadow-sm"
+                  title="Cerrar historial"
+                >
+                  <X size={24} strokeWidth={2.5} />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
+                {!user ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <div className="w-16 h-16 bg-stone-100 dark:bg-stone-800 rounded-full flex items-center justify-center mb-4">
+                      <History size={32} className="text-stone-400" />
+                    </div>
+                    <p className="text-stone-500 dark:text-stone-400 mb-6">Inicia sesión para ver tu historial de pedidos en la nube</p>
+                    <button 
+                      onClick={signInWithGoogle}
+                      className="bg-coda text-white px-6 py-2 rounded-xl font-bold shadow-md shadow-coda/20 hover:scale-105 transition-all"
+                    >
+                      Entrar con Google
+                    </button>
+                  </div>
+                ) : history.length === 0 ? (
+                  <div className="text-center py-12 text-stone-500 dark:text-stone-400">
+                    No hay pedidos registrados aún.
+                  </div>
+                ) : (
+                  history.map((order) => (
+                    <div 
+                      key={order.id}
+                      className="p-4 rounded-2xl bg-stone-50 dark:bg-[#0f172a] border border-stone-100 dark:border-stone-800 hover:border-coda/30 transition-all group"
+                    >
+                      <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <div className="font-bold text-stone-800 dark:text-stone-100">{order.nombre || 'Sin nombre'}</div>
+                          <div className="text-xs text-stone-500">{new Date(order.timestamp).toLocaleString()}</div>
+                        </div>
+                        <div className="text-lg font-black text-coda">${order.costo.toFixed(2)}</div>
+                      </div>
+                      <div className="text-sm text-stone-600 dark:text-stone-400 line-clamp-1 mb-3">
+                        {order.direccion}
+                      </div>
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            setNombreCliente(order.nombre);
+                            setTelefonoCliente(order.telefono);
+                            setDireccionCliente(order.direccion);
+                            setCliente({ lat: order.lat, lng: order.lng });
+                            if (map) {
+                              map.panTo({ lat: order.lat, lng: order.lng });
+                              map.setZoom(16);
+                            }
+                            setIsHistoryOpen(false);
+                            showToast('Pedido cargado', 'success');
+                          }}
+                          className="flex-1 bg-white dark:bg-stone-800 border border-stone-200 dark:border-stone-700 text-stone-700 dark:text-stone-200 text-xs font-bold py-2 rounded-lg hover:bg-stone-50 transition-all"
+                        >
+                          Reutilizar
+                        </button>
+                        <button 
+                          onClick={() => {
+                            const url = `https://maps.google.com/?q=${order.lat},${order.lng}`;
+                            window.open(url, '_blank');
+                          }}
+                          className="px-3 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 rounded-lg hover:text-coda transition-all"
+                        >
+                          <MapPin size={16} />
+                        </button>
+                        <button 
+                          onClick={() => deleteOrder(order.id)}
+                          className="px-3 bg-stone-100 dark:bg-stone-800 text-stone-400 hover:text-rose-500 rounded-lg transition-all"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-stone-100 dark:border-stone-800">
+                <button 
+                  onClick={() => setIsHistoryOpen(false)}
+                  className="w-full py-3 bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-300 font-bold rounded-2xl hover:bg-stone-200 transition-all"
+                >
+                  Cerrar Historial
                 </button>
               </div>
             </motion.div>

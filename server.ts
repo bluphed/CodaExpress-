@@ -2,6 +2,24 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import fetch from "node-fetch";
+import Database from "better-sqlite3";
+
+const db = new Database("orders.db");
+
+// Initialize database
+db.exec(`
+  CREATE TABLE IF NOT EXISTS orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre TEXT,
+    telefono TEXT,
+    direccion TEXT,
+    distancia REAL,
+    costo REAL,
+    lat REAL,
+    lng REAL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
 
 async function startServer() {
   const app = express();
@@ -34,6 +52,45 @@ async function startServer() {
     } catch (error) {
       console.error("Error resolving link:", error);
       res.status(500).json({ error: "Failed to resolve link" });
+    }
+  });
+
+  // API to save an order
+  app.post("/api/orders", (req, res) => {
+    const { nombre, telefono, direccion, distancia, costo, lat, lng } = req.body;
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO orders (nombre, telefono, direccion, distancia, costo, lat, lng)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const info = stmt.run(nombre, telefono, direccion, distancia, costo, lat, lng);
+      res.json({ id: info.lastInsertRowid });
+    } catch (error) {
+      console.error("Error saving order:", error);
+      res.status(500).json({ error: "Failed to save order" });
+    }
+  });
+
+  // API to get orders
+  app.get("/api/orders", (req, res) => {
+    try {
+      const orders = db.prepare("SELECT * FROM orders ORDER BY timestamp DESC LIMIT 50").all();
+      res.json(orders);
+    } catch (error) {
+      console.error("Error fetching orders:", error);
+      res.status(500).json({ error: "Failed to fetch orders" });
+    }
+  });
+
+  // API to delete an order
+  app.delete("/api/orders/:id", (req, res) => {
+    const { id } = req.params;
+    try {
+      db.prepare("DELETE FROM orders WHERE id = ?").run(id);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting order:", error);
+      res.status(500).json({ error: "Failed to delete order" });
     }
   });
 

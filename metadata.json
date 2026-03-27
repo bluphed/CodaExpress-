@@ -1,6 +1,6 @@
 {
   "name": "Coda express",
-  "description": "app G.N",
+  "description": "Calculadora de Delivery para Coda Express con rastreo de ubicación y gestión de pedidos.",
   "requestFramePermissions": [
     "geolocation"
   ]

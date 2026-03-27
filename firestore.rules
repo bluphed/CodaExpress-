@@ -1,0 +1,71 @@
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// Collection: orders
+// Document ID: auto-generated
+// Fields:
+//   - nombre: string (optional)
+//   - telefono: string (optional)
+//   - direccion: string (required)
+//   - lat: number (required)
+//   - lng: number (required)
+//   - costo: number (required)
+//   - timestamp: number (required)
+//   - uid: string (optional) - The UID of the user who created the order
+//
+// ===============================================================
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return isAuthenticated() && 
+             request.auth.token.email == "otroyo699@gmail.com" && 
+             request.auth.token.email_verified == true;
+    }
+    
+    function isOwner(uid) {
+      return isAuthenticated() && request.auth.uid == uid;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['direccion', 'lat', 'lng', 'costo', 'timestamp']) &&
+             data.direccion is string && data.direccion.size() > 0 && data.direccion.size() < 1000 &&
+             data.lat is number && data.lng is number &&
+             data.costo is number && data.costo >= 0 &&
+             data.timestamp is number &&
+             (!('nombre' in data) || (data.nombre is string && data.nombre.size() < 100)) &&
+             (!('telefono' in data) || (data.telefono is string && data.telefono.size() < 20)) &&
+             (!('uid' in data) || (data.uid is string));
+    }
+
+    // Rules for orders
+    match /orders/{orderId} {
+      // Admin can read all orders for monitoring
+      // Users can read their own orders if they are logged in
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
+      
+      // Anyone can create an order (even anonymous users if we enable it, but here we check data validity)
+      allow create: if isValidOrder(request.resource.data) && 
+                    (!('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid);
+      
+      // Only admin can delete orders
+      allow delete: if isAdmin();
+      
+      // No updates allowed to preserve order integrity
+      allow update: if false;
+    }
+
+    // Rules for user profiles
+    match /users/{userId} {
+      allow read, write: if request.auth.uid == userId;
+    }
+  }
+}

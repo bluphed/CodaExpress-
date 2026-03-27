@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "A delivery order record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nombre": { "type": "string" },
+        "telefono": { "type": "string" },
+        "direccion": { "type": "string" },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "costo": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "uid": { "type": "string", "description": "The user ID who created the order (optional)" }
+      },
+      "required": ["direccion", "lat", "lng", "costo", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Collection of all delivery orders"
+    }
+  }
+}
