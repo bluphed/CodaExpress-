@@ -84,8 +84,13 @@ export default function App() {
   const [isSplashVisible, setIsSplashVisible] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [restaurante, setRestaurante] = useState<Point>(() => {
-    const saved = localStorage.getItem('restaurante');
-    return saved ? JSON.parse(saved) : PREDEFINED_LOCATIONS[0];
+    try {
+      const saved = localStorage.getItem('restaurante');
+      return saved ? JSON.parse(saved) : PREDEFINED_LOCATIONS[0];
+    } catch (e) {
+      console.error('Error parsing restaurante from localStorage:', e);
+      return PREDEFINED_LOCATIONS[0];
+    }
   });
   const [cliente, setCliente] = useState<Point | null>(null);
   const [locationLink, setLocationLink] = useState('');
@@ -99,6 +104,7 @@ export default function App() {
   const [isDashboardOpen, setIsDashboardOpen] = useState(false);
   const [isAdminAuthenticated, setIsAdminAuthenticated] = useState(false);
   const [adminClickCount, setAdminClickCount] = useState(0);
+  const adminTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [passwordInput, setPasswordInput] = useState('');
   const [tiempoEntrega, setTiempoEntrega] = useState('Lo antes posible');
   const [user, setUser] = useState<User | null>(null);
@@ -328,7 +334,7 @@ export default function App() {
     try {
       const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       const model = genAI.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: `Analiza el siguiente texto y extrae el nombre del cliente, teléfono y dirección si están presentes. Devuelve un JSON con los campos: nombre, telefono, direccion. Si no encuentras alguno, deja el campo vacío. Texto: "${text}"`,
         config: { responseMimeType: "application/json" }
       });
@@ -351,15 +357,23 @@ export default function App() {
 
   // --- Handlers ---
   const handleAdminClick = () => {
+    if (adminTimeoutRef.current) {
+      clearTimeout(adminTimeoutRef.current);
+    }
+    
     const newCount = adminClickCount + 1;
     setAdminClickCount(newCount);
+    
     if (newCount === 3) {
       setIsDashboardOpen(true);
       setAdminClickCount(0);
       showToast('Acceso administrativo', 'info');
+      return;
     }
-    // Reset count after 2 seconds of inactivity
-    setTimeout(() => setAdminClickCount(0), 2000);
+    
+    adminTimeoutRef.current = setTimeout(() => {
+      setAdminClickCount(0);
+    }, 2000);
   };
 
   const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
@@ -449,11 +463,15 @@ export default function App() {
     const queryRegex = /[?&](?:q|query|ll)=(-?\d+\.\d+),(-?\d+\.\d+)/;
     const queryMatch = targetUrl.match(queryRegex);
 
-    // Matches /search/lat,lng
-    const searchRegex = /search\/(-?\d+\.\d+),(-?\d+\.\d+)/;
+    // Matches /search/lat,lng or /place/lat,lng or /dir/lat,lng
+    const searchRegex = /(?:search|place|dir)\/(-?\d+\.\d+),(-?\d+\.\d+)/;
     const searchMatch = targetUrl.match(searchRegex);
 
-    const finalMatch = match || desktopMatch || queryMatch || searchMatch;
+    // Generic lat,lng match as last resort (must be two numbers separated by comma)
+    const genericRegex = /(-?\d+\.\d+),(-?\d+\.\d+)/;
+    const genericMatch = targetUrl.match(genericRegex);
+
+    const finalMatch = match || desktopMatch || queryMatch || searchMatch || genericMatch;
 
     if (finalMatch) {
       const lat = parseFloat(finalMatch[1]);
@@ -525,7 +543,7 @@ export default function App() {
       `📞 *Teléfono:* ${resultado.telefono || 'No especificado'}\n` +
       `🏠 *Dirección Cliente:* ${resultado.direccion || 'No especificada'}\n` +
       `🗺️ *Ubicación GPS Cliente:* ${clientMapsLink}\n\n` +
-      `🕒 *Tiempo de entrega:* ${resultado.tiempoEntrega}\n` +
+      `🕒 *Motorizado debe ir en:* ${resultado.tiempoEntrega}\n` +
       `📏 *Distancia:* ${resultado.distancia.toFixed(2)} km\n` +
       `💰 *Costo de envío:* $${resultado.costo.toFixed(2)}`;
 
@@ -596,7 +614,7 @@ export default function App() {
                   referrerPolicy="no-referrer"
                 />
               </div>
-              <h1 className="text-2xl font-bold text-coda">Coda Express</h1>
+              <h1 className="text-2xl font-bold text-coda">Coda Express <span className="text-[10px] font-normal opacity-30">v1.1</span></h1>
             </div>
             <div className="flex items-center gap-2">
               {user ? (
@@ -837,7 +855,7 @@ export default function App() {
                   </div>
 
                   <div className="pt-2">
-                    <label className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1 block">Tiempo de entrega estimado</label>
+                    <label className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1 block">¿En cuánto tiempo debe ir el motorizado?</label>
                     <div className="grid grid-cols-2 gap-2">
                       {['Lo antes posible', '15-20 min', '30 min', '45 min'].map((time) => (
                         <button

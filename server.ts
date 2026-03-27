@@ -39,17 +39,26 @@ async function startServer() {
     }
 
     try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout
+
       const response = await fetch(url, {
         method: "GET",
         redirect: "follow",
+        signal: controller.signal,
         headers: {
           "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
         }
       });
       
+      clearTimeout(timeout);
       const finalUrl = response.url;
       res.json({ finalUrl });
-    } catch (error) {
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.error("Link resolution timed out:", url);
+        return res.status(504).json({ error: "Timeout resolving link" });
+      }
       console.error("Error resolving link:", error);
       res.status(500).json({ error: "Failed to resolve link" });
     }
