@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Coda Express</string>
-    <string name="title_activity_main">Coda Express</string>
-    <string name="package_name">com.codaexpress.app</string>
-    <string name="custom_url_scheme">com.codaexpress.app</string>
-</resources>
