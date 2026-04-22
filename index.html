@@ -37,8 +37,75 @@
       --card-bg: #1e293b;
       --border: #334155;
     }
+
+
+ .install-btn {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: var(--coda);
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 40px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      z-index: 100;
+      display: none;
+    }
+    
+    .install-btn.show {
+      display: block;
+    }
+    
+
+
+
+
+
+    
   </head>
   <body>
+
+
+<div class="container">
+  <div class="header">
+    <div class="logo-area">
+      <img class="logo-img" src="/Gabriel_CodaExpress/android-chrome-192x192.png" alt="Coda Express">
+      <h1>Coda Express</h1>
+    </div>
+    <div style="display: flex; gap: 10px;">
+      <button class="btn-secondary" id="darkModeBtn">🌙</button>
+      <button class="btn-secondary" id="helpBtn">❓ Ayuda</button>
+    </div>
+  </div>
+
+
+
+
+    
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
