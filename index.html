@@ -3,128 +3,58 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    
     <title>Coda Express - Calculadora de Delivery</title>
-
-    
-    <link rel="manifest" href="/manifest.json" />
-
-
-    
+    <link rel="manifest" href="/manifest.json?v=17.0" />
     <meta name="theme-color" content="#DE440D" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    
-    <link rel="apple-touch-icon" href="/icon.svg" />
-
-    
-    <link rel="manifest" href="CodaExpress/manifest.json">
-    
-    <link rel="icon" type="image/png" sizes="192x192" href="/Gabriel_CodaExpress/android-chrome-192x192.png">
-  <link rel="icon" type="image/png" sizes="512x512" href="/Gabriel_CodaExpress/android-chrome-512x512.png">
-  <link rel="apple-touch-icon" href="/Gabriel_CodaExpress/android-chrome-192x192.png">
-  
-  <title>Coda Express</title>
-  
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-    
-    :root {
-      --bg-primary: #f8fafc;
-      --text-primary: #1e293b;
-      --card-bg: #ffffff;
-      --coda: #DE440D;
-      --coda-dark: #b83a0a;
-      --border: #e2e8f0;
-    }
-    
-    .dark {
-      --bg-primary: #0f172a;
-      --text-primary: #f1f5f9;
-      --card-bg: #1e293b;
-      --border: #334155;
-    }
-
-
- .install-btn {
-      position: fixed;
-      bottom: 20px;
-      right: 20px;
-      background: var(--coda);
-      color: white;
-      border: none;
-      padding: 12px 20px;
-      border-radius: 40px;
-      font-weight: 600;
-      cursor: pointer;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-      z-index: 100;
-      display: none;
-    }
-    
-    .install-btn.show {
-      display: block;
-    }
-    
+    <link rel="icon" type="image/png" sizes="192x192" href="/Gabriel_CodaExpress/android-chrome-192x192.png?v=17.0" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/Gabriel_CodaExpress/android-chrome-512x512.png?v=17.0" />
+    <link rel="apple-touch-icon" href="/Gabriel_CodaExpress/apple-touch-icon.png?v=17.0" />
 
 
 
-
-
-    
   </head>
   <body>
-
-
-<div class="container">
-  <div class="header">
-    <div class="logo-area">
-      <img class="logo-img" src="/Gabriel_CodaExpress/android-chrome-192x192.png" alt="Coda Express">
-      <h1>Coda Express</h1>
-    </div>
-    <div style="display: flex; gap: 10px;">
-      <button class="btn-secondary" id="darkModeBtn">🌙</button>
-      <button class="btn-secondary" id="helpBtn">❓ Ayuda</button>
-    </div>
-  </div>
-
-
-
-
-    
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      // Function to force clear everything and reload
+      window.forceUpdate = async () => {
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (let registration of registrations) {
+            await registration.unregister();
+          }
+        }
+        if ('caches' in window) {
+          const cacheNames = await caches.keys();
+          for (let cacheName of cacheNames) {
+            await caches.delete(cacheName);
+          }
+        }
+        window.location.reload(true);
+      };
+
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then((registration) => {
-            console.log('ServiceWorker registration successful with scope: ', registration.scope);
-          }, (err) => {
-            console.log('ServiceWorker registration failed: ', err);
+          navigator.serviceWorker.getRegistrations().then((registrations) => {
+            let foundNew = false;
+            for (let registration of registrations) {
+              const url = registration.active?.scriptURL || registration.installing?.scriptURL || registration.waiting?.scriptURL;
+              if (url && !url.includes('service-worker-v17.js')) {
+                console.log('Unregistering old SW:', url);
+                registration.unregister();
+              } else if (url && url.includes('service-worker-v17.js')) {
+                foundNew = true;
+              }
+            }
+            
+            if (!foundNew) {
+              navigator.serviceWorker.register('/service-worker-v17.js').then((reg) => {
+                console.log('New ServiceWorker registered:', reg.scope);
+              }).catch(err => {
+                console.error('ServiceWorker registration failed:', err);
+              });
+            }
           });
         });
       }

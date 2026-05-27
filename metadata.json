@@ -1,5 +1,5 @@
 {
-  "name": "Coda express",
+  "name": "Coda Express",
   "description": "Calculadora de Delivery para Coda Express con rastreo de ubicación y gestión de pedidos.",
   "requestFramePermissions": [
     "geolocation"

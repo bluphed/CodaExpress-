@@ -1,0 +1,85 @@
+@import "tailwindcss";
+
+@theme {
+  --color-coda: #DE440D;
+}
+
+:root {
+  --bg-primary: #f8fafc;
+  --text-primary: #1e293b;
+  --border-color: #e2e8f0;
+  --card-bg: #ffffff;
+}
+
+.dark {
+  --bg-primary: #0f172a;
+  --text-primary: #f1f5f9;
+  --border-color: #334155;
+  --card-bg: #1e293b;
+}
+
+html, body {
+  overflow-x: hidden;
+  width: 100%;
+}
+
+body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  transition: all 0.3s;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.02); }
+}
+
+.animate-spin-slow {
+  animation: spin 1s linear infinite;
+}
+
+.animate-pulse-slow {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes bounce-subtle {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+.animate-bounce-subtle {
+  animation: bounce-subtle 1.5s ease-in-out infinite;
+}
+
+@keyframes run-fast {
+  0%, 100% { transform: translateX(0) scale(1); }
+  25% { transform: translateX(3px) scale(1.02); }
+  50% { transform: translateX(0) scale(1); }
+  75% { transform: translateX(-3px) scale(0.98); }
+}
+
+.animate-run-fast {
+  animation: run-fast 0.4s ease-in-out infinite;
+}
+ 
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+ 
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+ 
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #e2e8f0;
+  border-radius: 10px;
+}
+ 
+.dark .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #334155;
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Coda Express",
+  "short_name": "Coda Express",
+  "description": "Calculadora de Delivery para Coda Express",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#DE440D",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

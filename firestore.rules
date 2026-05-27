@@ -52,9 +52,9 @@ service cloud.firestore {
       // Users can read their own orders if they are logged in
       allow read: if isAdmin() || (isAuthenticated() && resource.data.uid == request.auth.uid);
       
-      // Anyone can create an order (even anonymous users if we enable it, but here we check data validity)
+      // Anyone can create an order (even anonymous users)
       allow create: if isValidOrder(request.resource.data) && 
-                    (!('uid' in request.resource.data) || request.resource.data.uid == request.auth.uid);
+                    (request.resource.data.uid == 'anonymous' || request.resource.data.uid == request.auth.uid);
       
       // Only admin can delete orders
       allow delete: if isAdmin();

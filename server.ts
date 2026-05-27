@@ -40,19 +40,27 @@ async function startServer() {
 
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000); // 8 seconds timeout
+      const timeout = setTimeout(() => controller.abort(), 10000); // 10 seconds timeout
 
       const response = await fetch(url, {
         method: "GET",
         redirect: "follow",
         signal: controller.signal,
         headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+          "Accept-Language": "en-US,en;q=0.9,es;q=0.8",
+          "Cache-Control": "no-cache",
+          "Pragma": "no-cache",
+          "Upgrade-Insecure-Requests": "1"
         }
       });
       
       clearTimeout(timeout);
       const finalUrl = response.url;
+      
+      // Some short links might redirect to a page that then redirects via JS or meta refresh
+      // but usually node-fetch follows the HTTP redirects correctly.
       res.json({ finalUrl });
     } catch (error: any) {
       if (error.name === 'AbortError') {
